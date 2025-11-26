@@ -68,6 +68,13 @@ const char compileDate[] = __DATE__ " " __TIME__;
 #define SEEK_FWD 7
 #define VOL_UP 6
 #define VOL_DWN 5
+#define BT_POWER 4
+
+#define BT_POWERUP_DELAY_MS 1000
+#define BT_POWEROFF_DELAY_MS 2000
+
+bool btIsOn = false;
+unsigned long btPowerChangeTime = 0;
 
 bool QCCPlaying = false;
 
@@ -84,16 +91,9 @@ void pinDown(int pin) {
 }
 
 void pinsSetup() {
-  pinDown(PLAY_BTN);
-  pinDown(SEEK_BCK);
-  pinDown(SEEK_FWD);
-  pinDown(VOL_UP);
-  pinDown(VOL_DWN);
-
   // disable unused pins
   for (int p = 0; p <= 13; p++) {
-    if (p!=PLAY_BTN && p!=SEEK_BCK && p!=SEEK_FWD && p!=VOL_UP && p!=VOL_DWN)
-      pinMode(p, OUTPUT), digitalWrite(p, LOW);
+    pinDown(p);
   }
 }
 
@@ -101,7 +101,7 @@ void pressButton(int pin) {
   currentPress.pin = pin;
   currentPress.startTime = millis();
   currentPress.active = true;
-  digitalWrite(pin,HIGH);
+  digitalWrite(pin, HIGH);
 }
 
 void handleButtonRelease() {
@@ -114,6 +114,31 @@ void handleButtonRelease() {
 void pressPlayButton() {
   QCCPlaying = !QCCPlaying;
   pressButton(PLAY_BTN);
+}
+
+void btSmoothOn() {
+  if (!btIsOn) {
+    // soft-start / "smooth" power up
+    btPowerChangeTime = millis();
+    while (millis() - btPowerChangeTime < BT_POWERUP_DELAY_MS) {
+      // idle while allowing CAN interrupts
+      handleButtonRelease();
+    }
+
+    digitalWrite(BT_POWER, HIGH);
+    btIsOn = true;
+  }
+}
+
+void btSmoothOff() {
+  if (btIsOn) {
+    digitalWrite(BT_POWER, LOW);
+    btPowerChangeTime = millis();
+    while (millis() - btPowerChangeTime < BT_POWEROFF_DELAY_MS) {
+      handleButtonRelease();
+    }
+    btIsOn = false;
+  }
 }
 
 #define CAN_POWER 0x000
@@ -141,8 +166,9 @@ void setup() {
   // Power reduction
   ADCSRA &= ~_BV(ADEN);
   ACSR |= _BV(ACD);
-  PRR |= _BV(PRTWI) | _BV(PRTIM1) | _BV(PRTIM2);
+  PRR0 |= _BV(PRTWI1) | _BV(PRTIM1) | _BV(PRTIM2);
 
+  pinsSetup();
   setupFilters();
 
 #ifdef DEBUG
@@ -189,6 +215,15 @@ void checkIncomingMessages() {
   canId = CAN.getCanId();
 
   switch (canId) {
+    case CAN_POWER:
+    // If engine/accessory power goes away, shut down BT immediately
+      if (len > 0 && buf[0] == 0x00) {  // 0x00 usually means key OFF
+        btSmoothOff();
+#ifdef DEBUG
+        Serial.println("Car power down → BT OFF");
+#endif
+      }
+      break;
     case CAN_RADIO_MODE:
 
 #ifdef DEBUG
@@ -209,18 +244,24 @@ void checkIncomingMessages() {
       Serial.println(newMode);
 #endif
 
-      //newMode = ((buf[0] & 0xF) == 6) ? RADIOMODE_AUX : RADIOMODE_OTHER;
-      newMode = ((buf[0] & 0x0F) == 0x06);
+      newMode = ((buf[0] & 0xF) == 6) ? RADIOMODE_AUX : RADIOMODE_OTHER;
+      //newMode = ((buf[0] & 0x0F) == 0x06);
 
       if (radioMode != newMode) {
         radioMode = newMode;
-        if (radioMode == RADIOMODE_AUX && !QCCPlaying) {
-          pressPlayButton();
+        if (radioMode == RADIOMODE_AUX) {
+          btSmoothOn();
+          if (!QCCPlaying) {
+            pressPlayButton();
+          }
 #ifdef DEBUG
           Serial.print("Radio Mode changed to AUX");
 #endif
-        } else if(radioMode!=RADIOMODE_AUX && QCCPlaying) {
-          pressPlayButton();
+        } else {
+          btSmoothOff();
+          if (QCCPlaying) {
+            pressPlayButton();
+          }
 #ifdef DEBUG
           Serial.print("Radio Mode changed to something else");
 #endif
