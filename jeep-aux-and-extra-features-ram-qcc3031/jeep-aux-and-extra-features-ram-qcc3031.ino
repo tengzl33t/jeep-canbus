@@ -35,17 +35,17 @@ void canISR() {
 }
 
 #define CAN_MODULE_CS_PIN 10  // PB2
-//#define DEBUG
 
 #define CHECK_PERIOD_MS 200
 #define ANNOUNCE_PERIOD_MS 1000
 #define BUTTON_PRESS_DEBOUNCE_MS 350
 
+// Debug switchers
+//#define DEBUG
 //#define BENCH_MODE_ON
 
 MCP_CAN CAN(CAN_MODULE_CS_PIN);
 
-unsigned long lastCheck = 0;
 unsigned long lastAnnounce = 0;
 unsigned long lastButtonPress = 0;
 
@@ -69,6 +69,15 @@ const char compileDate[] = __DATE__ " " __TIME__;
 #define VOL_UP 6
 #define VOL_DWN 5
 
+bool QCCPlaying = false;
+
+struct ButtonPress {
+  int pin;
+  unsigned long startTime;
+  bool active;
+};
+ButtonPress currentPress = {0,0,false};
+
 void pinDown(int pin) {
   pinMode(pin, OUTPUT);
   digitalWrite(pin, LOW);
@@ -80,14 +89,26 @@ void pinsSetup() {
   pinDown(SEEK_FWD);
   pinDown(VOL_UP);
   pinDown(VOL_DWN);
+
+  // disable unused pins
+  for (int p = 0; p <= 13; p++) {
+    if (p!=PLAY_BTN && p!=SEEK_BCK && p!=SEEK_FWD && p!=VOL_UP && p!=VOL_DWN)
+      pinMode(p, OUTPUT), digitalWrite(p, LOW);
+  }
 }
 
-bool QCCPlaying = false;
-
 void pressButton(int pin) {
-  digitalWrite(pin, HIGH);
-  delay(200);
-  digitalWrite(pin, LOW);
+  currentPress.pin = pin;
+  currentPress.startTime = millis();
+  currentPress.active = true;
+  digitalWrite(pin,HIGH);
+}
+
+void handleButtonRelease() {
+  if(currentPress.active && millis() - currentPress.startTime >= 200){
+    digitalWrite(currentPress.pin,LOW);
+    currentPress.active=false;
+  }
 }
 
 void pressPlayButton() {
@@ -193,17 +214,13 @@ void checkIncomingMessages() {
 
       if (radioMode != newMode) {
         radioMode = newMode;
-        if (radioMode == RADIOMODE_AUX) {
-          if (!QCCPlaying) {
-            pressPlayButton();
-          }
+        if (radioMode == RADIOMODE_AUX && !QCCPlaying) {
+          pressPlayButton();
 #ifdef DEBUG
           Serial.print("Radio Mode changed to AUX");
 #endif
-        } else {
-          if (QCCPlaying) {
-            pressPlayButton();
-          }
+        } else if(radioMode!=RADIOMODE_AUX && QCCPlaying) {
+          pressPlayButton();
 #ifdef DEBUG
           Serial.print("Radio Mode changed to something else");
 #endif
@@ -212,8 +229,9 @@ void checkIncomingMessages() {
       break;
     case CAN_RADIO_CONTROLS:
       // radio mode + buttons
-      if (buf[3] > 0 && millis() > lastButtonPress + BUTTON_PRESS_DEBOUNCE_MS) {  // something pressed
-        lastButtonPress = millis();
+      unsigned long now = millis();
+      if (buf[3] > 0 && now > lastButtonPress + BUTTON_PRESS_DEBOUNCE_MS) {  // something pressed
+        lastButtonPress = now;
         if (buf[3] & 1) {  // seek right
           pressButton(SEEK_FWD);
 
@@ -260,6 +278,7 @@ void loop() {
       canIntFlag = false;
       checkIncomingMessages();
   }
+  handleButtonRelease();
 
   set_sleep_mode(SLEEP_MODE_IDLE);
   sleep_enable();
