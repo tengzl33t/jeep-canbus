@@ -27,14 +27,19 @@
 #include <SoftwareSerial.h>
 #include <SPI.h>
 #include "mcp_can.h"
+#include <avr/sleep.h>
 
-#define CAN_MODULE_CS_PIN 10 // PB2
+volatile bool canIntFlag = false;
+void canISR() {
+  canIntFlag = true;
+}
+
+#define CAN_MODULE_CS_PIN 10  // PB2
+//#define DEBUG
 
 #define CHECK_PERIOD_MS 200
-#define ANNOUNCE_PERIOD_MS 500
+#define ANNOUNCE_PERIOD_MS 1000
 #define BUTTON_PRESS_DEBOUNCE_MS 350
-
-#define CAN_DELAY_AFTER_SEND 20
 
 //#define BENCH_MODE_ON
 
@@ -45,11 +50,11 @@ unsigned long lastAnnounce = 0;
 unsigned long lastButtonPress = 0;
 
 #define msgVesAuxModeLen 8
-unsigned char msgVesAuxMode[8] = {3, 0, 0, 0, 0, 0, 0, 0};
+unsigned char msgVesAuxMode[8] = { 3, 0, 0, 0, 0, 0, 0, 0 };
 
 #ifdef BENCH_MODE_ON
 #define msgPowerOnLen 6
-unsigned char msgPowerOn[6] = {0x63, 0, 0, 0, 0, 0};
+unsigned char msgPowerOn[6] = { 0x63, 0, 0, 0, 0, 0 };
 #endif
 
 #define RADIOMODE_OTHER 0
@@ -99,44 +104,54 @@ void pressPlayButton() {
 //#define CAN_MULTI_SWITCH   0x11d
 //#define CAN_HEADLIGHTS 0x1c8
 
-// void setupFilters() {
-//  CAN.init_Mask(0, 0, 0x3ff);
-//  CAN.init_Mask(1, 0, 0x3ff);
-//
-//  CAN.init_Filt(0, 0, CAN_POWER);
-//  CAN.init_Filt(1, 0, CAN_RADIO_MODE);
-//  CAN.init_Filt(2, 0, CAN_RADIO_CONTROLS);
-//  CAN.init_Filt(3, 0, CAN_BLINKERS);
-//  CAN.init_Filt(4, 0, 0x08);
-//  CAN.init_Filt(5, 0, 0x09);
-//}
+void setupFilters() {
+  CAN.init_Mask(0, 0, 0x3ff);
+  CAN.init_Mask(1, 0, 0x3ff);
+
+  CAN.init_Filt(0, 0, CAN_POWER);
+  CAN.init_Filt(1, 0, CAN_RADIO_MODE);
+  CAN.init_Filt(2, 0, CAN_RADIO_CONTROLS);
+  CAN.init_Filt(3, 0, CAN_BLINKERS);
+  CAN.init_Filt(4, 0, 0x08);
+  CAN.init_Filt(5, 0, 0x09);
+}
 
 void setup() {
-  //  pinsSetup();
+  // Power reduction
+  ADCSRA &= ~_BV(ADEN);
+  ACSR |= _BV(ACD);
+  PRR |= _BV(PRTWI) | _BV(PRTIM1) | _BV(PRTIM2);
 
+  setupFilters();
+
+#ifdef DEBUG
   Serial.begin(115200);
   Serial.print("Jeep VES Enabler + Extras by latonita v.1.1, ");
   Serial.println(compileDate);
+#endif
 
   while (CAN_OK != CAN.begin(CAN_83K3BPS, MCP_8MHz)) {
+#ifdef DEBUG
     Serial.println("CAN init fail");
+#endif
     delay(250);
   }
+#ifdef DEBUG
   Serial.println("CAN init ok");
+#endif
 
-  // TODO: set hardware filter to minimize number messages which come through
-  // setupFilters();
+  // interrupts for can int
+  attachInterrupt(digitalPinToInterrupt(2), canISR, FALLING);
+
 }
 
 void sendAnnouncements() {
 #ifdef BENCH_MODE_ON
   // when on bench - send power on command to radio to enable it
   CAN.sendMsgBuf(CAN_POWER, 0, msgPowerOnLen, msgPowerOn);
-  delay(CAN_DELAY_AFTER_SEND);
 #endif
   // tell them VES AUX is here
   CAN.sendMsgBuf(CAN_VES_UNIT, 0, msgVesAuxModeLen, msgVesAuxMode);
-  delay(CAN_DELAY_AFTER_SEND);
 }
 
 unsigned int canId = 0;
@@ -153,69 +168,101 @@ void checkIncomingMessages() {
   canId = CAN.getCanId();
 
   switch (canId) {
-  case CAN_RADIO_MODE:
+    case CAN_RADIO_MODE:
 
-    // some debug output
-    Serial.print("CAN ID: ");
-    Serial.print(canId, HEX);
+#ifdef DEBUG
+      // some debug output
+      Serial.print("CAN ID: ");
+      Serial.print(canId, HEX);
 
-    for (int i = 0; i < len; i++) {
-      Serial.print(",");
-      Serial.print(buf[i], HEX);
-    }
-    Serial.println();
-    Serial.print("Radio mode: ");
-    Serial.print(buf[0] & 0xF, HEX);
-    Serial.print(":");
-    Serial.print(radioMode);
-    Serial.print(">");
-    Serial.println(newMode);
-
-    newMode = ((buf[0] & 0xF) == 6) ? RADIOMODE_AUX : RADIOMODE_OTHER;
-
-    if (radioMode != newMode) {
-      radioMode = newMode;
-      if (radioMode == RADIOMODE_AUX) {
-        if (!QCCPlaying) {
-          pressPlayButton();
-        }
-        Serial.print("Radio Mode changed to AUX");
-      } else {
-        if (QCCPlaying) {
-          pressPlayButton();
-        }
-        Serial.print("Radio Mode changed to something else");
+      for (int i = 0; i < len; i++) {
+        Serial.print(",");
+        Serial.print(buf[i], HEX);
       }
-    }
-    break;
-  case CAN_RADIO_CONTROLS:
-    // radio mode + buttons
-    if (buf[3] > 0 && millis() > lastButtonPress + BUTTON_PRESS_DEBOUNCE_MS) { // something pressed
-      lastButtonPress = millis();
-      if (buf[3] & 1) { // seek right
-        pressButton(SEEK_FWD);
-        Serial.println("-- Seek >>");
-      } else if (buf[3] & 2) { // seek left
-        pressButton(SEEK_BCK);
-        Serial.println("<< Seek --");
-      } else if (buf[3] & 4) { // rw/ff right
-        Serial.println("-- RW FF >>");
-      } else if (buf[3] & 8) { // rw/ff left
-        Serial.println("<< RW FF --");
-      } else if (buf[3] & 0x20) { // RND/PTY
-        pressPlayButton();
-        Serial.println("[RND/PTY] - use as play/pause");
-      }
-    }
+      Serial.println();
+      Serial.print("Radio mode: ");
+      Serial.print(buf[0] & 0xF, HEX);
+      Serial.print(":");
+      Serial.print(radioMode);
+      Serial.print(">");
+      Serial.println(newMode);
+#endif
 
-  default:
-    break;
+      //newMode = ((buf[0] & 0xF) == 6) ? RADIOMODE_AUX : RADIOMODE_OTHER;
+      newMode = ((buf[0] & 0x0F) == 0x06);
+
+      if (radioMode != newMode) {
+        radioMode = newMode;
+        if (radioMode == RADIOMODE_AUX) {
+          if (!QCCPlaying) {
+            pressPlayButton();
+          }
+#ifdef DEBUG
+          Serial.print("Radio Mode changed to AUX");
+#endif
+        } else {
+          if (QCCPlaying) {
+            pressPlayButton();
+          }
+#ifdef DEBUG
+          Serial.print("Radio Mode changed to something else");
+#endif
+        }
+      }
+      break;
+    case CAN_RADIO_CONTROLS:
+      // radio mode + buttons
+      if (buf[3] > 0 && millis() > lastButtonPress + BUTTON_PRESS_DEBOUNCE_MS) {  // something pressed
+        lastButtonPress = millis();
+        if (buf[3] & 1) {  // seek right
+          pressButton(SEEK_FWD);
+
+#ifdef DEBUG
+          Serial.println("-- Seek >>");
+#endif
+        } else if (buf[3] & 2) {  // seek left
+          pressButton(SEEK_BCK);
+
+#ifdef DEBUG
+          Serial.println("<< Seek --");
+#endif
+        } else if (buf[3] & 4) {  // rw/ff right
+#ifdef DEBUG
+          Serial.println("-- RW FF >>");
+#endif
+        } else if (buf[3] & 8) {  // rw/ff left
+#ifdef DEBUG
+          Serial.println("<< RW FF --");
+#endif
+        } else if (buf[3] & 0x20) {  // RND/PTY
+          pressPlayButton();
+
+#ifdef DEBUG
+          Serial.println("[RND/PTY] - use as play/pause");
+#endif
+        }
+      }
+
+    default:
+      break;
   }
 }
 void loop() {
+#ifdef DEBUG
+  Serial.println("loop started");
+#endif
+
   if (millis() > lastAnnounce + ANNOUNCE_PERIOD_MS) {
     lastAnnounce = millis();
     sendAnnouncements();
   }
-  checkIncomingMessages();
+  if (canIntFlag) {
+      canIntFlag = false;
+      checkIncomingMessages();
+  }
+
+  set_sleep_mode(SLEEP_MODE_IDLE);
+  sleep_enable();
+  sleep_cpu();
+  sleep_disable();
 }
