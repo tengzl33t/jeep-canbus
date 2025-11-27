@@ -161,14 +161,13 @@ void setup() {
   // Power reduction
   ADCSRA &= ~_BV(ADEN);
   ACSR |= _BV(ACD);
-  //PRR0 |= _BV(PRTWI1) | _BV(PRTIM1) | _BV(PRTIM2);
-
-  //setupFilters();
 
   if (debugMode) {
     Serial.begin(115200);
-    Serial.print("RAM VES Control by latonita & tengz v1.0");
+    Serial.print("RAM RAQ VES Control by latonita & tengz v1.0");
     Serial.println(compileDate);
+  } else {
+    //setupFilters();
   }
 
   while (CAN_OK != CAN.begin(CAN_83K3BPS, MCP_8MHz)) {
@@ -304,9 +303,6 @@ void checkIncomingMessages() {
   }
 }
 void loop() {
-  if (debugMode) {
-    Serial.println("loop started");
-  }
   unsigned long now = millis();
 
   if ((carIsOn || benchMode) && now > lastAnnounce + ANNOUNCE_PERIOD_MS) {
