@@ -1,25 +1,20 @@
 /*****************************************************************************************
  *
- * Hack for my Jeep Grand Cherokee WH 2006 (european) + RAR radio head unit
+ * Hack for my Dodge RAM 2006 MEX + RAQ radio head unit
  *
  * My hardware:
- *  1. Arduino Pro Mini 5v/16Mhz
- *  2. Mcp2515_can SPI module (8Mhz)
- *  3. Generic (H166) bluetooth A2DP module based on OVC3860, UART connected to Arduino
+ *  1. Arduino Nano re-flashed with 8MHz bootloader
+ *  2. Mcp2515_can SPI module (8MHz)
+ *  3. QCC3031 bluetooth module controlled by digital pins
  *
  * Features:
  *  1. Bench mode to enable radio functioning while removed from the car
- *  2. Emulating VES presense to enable AUX IN in head unit
- *  2.1. Turn on/off BT A2DP module only when AUX IN is selected
- *  3. Control BT audio source with seek buttons
- *  4. [todo] Signal comfort module - blinkers blink three times instead of one.
- *  5. [todo] Headlights - always on
- *  6. [todo] Auto wipers - require installation of rain sensor (? maybe it will work alone, w/o my software :)
- *  7. [todo] Auto parameters display
- *  7.1. gasoline cost for a trip
+ *  2. Emulating VES presence to enable AUX IN in head unit
+ *  2.1. Turn on/off BT A2DP module only when AUX IN is selected and car ignition is on
+ *  3. Control BT audio source with buttons
  *
- * Copyright (C) 2015-2017 Anton Viktorov <latonita@yandex.ru>
- *                                    https://github.com/latonita/jeep-canbus
+ * Copyright (C) 2015-2017 Anton Viktorov <latonita@yandex.ru> https://github.com/latonita/jeep-canbus,
+ * 2025 Tengz https://github.com/tengzl33t/jeep-canbus
  *
  * This is free software. You may use/redistribute it under The MIT License terms.
  *
@@ -52,9 +47,20 @@ unsigned long lastButtonPress = 0;
 #define msgVesAuxModeLen 8
 unsigned char msgVesAuxMode[8] = { 3, 0, 0, 0, 0, 0, 0, 0 };
 
+//0x63 OLD VALUE
+
+// new values for mygig:
+//0x00	Off
+//0x01	Key in
+//0x41	Accessory/ACC
+//0x81	Run
+
 #ifdef BENCH_MODE_ON
+bool benchMode = true;
 #define msgPowerOnLen 6
-unsigned char msgPowerOn[6] = { 0x63, 0, 0, 0, 0, 0 };
+unsigned char msgPowerOn[6] = { 0x41, 0, 0, 0, 0, 0 };
+#else
+bool benchMode = false;
 #endif
 
 #define RADIOMODE_OTHER 0
@@ -74,6 +80,7 @@ const char compileDate[] = __DATE__ " " __TIME__;
 #define BT_POWEROFF_DELAY_MS 2000
 
 bool btIsOn = false;
+bool carIsOn = false;
 unsigned long btPowerChangeTime = 0;
 
 bool QCCPlaying = false;
@@ -195,22 +202,32 @@ unsigned char newMode = 0;
 
 void checkIncomingMessages() {
 
-  if (CAN_MSGAVAIL != CAN.checkReceive())
+  if (CAN_MSGAVAIL != CAN.checkReceive()) {
     return;
+  }
 
   CAN.readMsgBuf(&len, buf);
   canId = CAN.getCanId();
 
-  switch (canId) {
-    case CAN_POWER:
-    // If engine/accessory power goes away, shut down BT immediately
-      if (len > 0 && buf[0] == 0x00) {  // 0x00 usually means key OFF
-        btSmoothOff();
+  if (canId == CAN_POWER && len > 0) {
+      if (buf[0] == 0x00 && !benchMode) {
 #ifdef DEBUG
-        Serial.println("Car power down → BT OFF");
+            Serial.println("Power OFF");
 #endif
+          carIsOn = false;
+          btSmoothOff();
+      } else {
+#ifdef DEBUG
+          Serial.println("Power ON");
+#endif
+          carIsOn = true;
       }
-      break;
+      return;
+  }
+
+  if (!carIsOn) return;
+
+  switch (canId) {
     case CAN_RADIO_MODE:
 
 #ifdef DEBUG
@@ -237,7 +254,6 @@ void checkIncomingMessages() {
       if (radioMode != newMode) {
         radioMode = newMode;
         if (radioMode == RADIOMODE_AUX) {
-          btSmoothOn();
           if (!QCCPlaying) {
             pressPlayButton();
           }
@@ -245,7 +261,6 @@ void checkIncomingMessages() {
           Serial.print("Radio Mode changed to AUX");
 #endif
         } else {
-          btSmoothOff();
           if (QCCPlaying) {
             pressPlayButton();
           }
@@ -297,9 +312,10 @@ void loop() {
 #ifdef DEBUG
   Serial.println("loop started");
 #endif
+  unsigned long now = millis();
 
-  if (millis() > lastAnnounce + ANNOUNCE_PERIOD_MS) {
-    lastAnnounce = millis();
+  if ((carIsOn || benchMode) && now > lastAnnounce + ANNOUNCE_PERIOD_MS) {
+    lastAnnounce = now;
     sendAnnouncements();
   }
   if (canIntFlag) {
