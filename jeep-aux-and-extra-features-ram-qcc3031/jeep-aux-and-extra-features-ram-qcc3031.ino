@@ -41,7 +41,7 @@ void canISR() {
 #define BUTTON_PRESS_DEBOUNCE_MS 350
 
 // Debug switchers
-//#define DEBUG
+#define DEBUG
 //#define BENCH_MODE_ON
 
 MCP_CAN CAN(CAN_MODULE_CS_PIN);
@@ -84,18 +84,6 @@ struct ButtonPress {
   bool active;
 };
 ButtonPress currentPress = {0,0,false};
-
-void pinDown(int pin) {
-  pinMode(pin, OUTPUT);
-  digitalWrite(pin, LOW);
-}
-
-void pinsSetup() {
-  // disable unused pins
-  for (int p = 0; p <= 13; p++) {
-    pinDown(p);
-  }
-}
 
 void pressButton(int pin) {
   currentPress.pin = pin;
@@ -166,10 +154,9 @@ void setup() {
   // Power reduction
   ADCSRA &= ~_BV(ADEN);
   ACSR |= _BV(ACD);
-  PRR0 |= _BV(PRTWI1) | _BV(PRTIM1) | _BV(PRTIM2);
+  //PRR0 |= _BV(PRTWI1) | _BV(PRTIM1) | _BV(PRTIM2);
 
-  pinsSetup();
-  setupFilters();
+  //setupFilters();
 
 #ifdef DEBUG
   Serial.begin(115200);
