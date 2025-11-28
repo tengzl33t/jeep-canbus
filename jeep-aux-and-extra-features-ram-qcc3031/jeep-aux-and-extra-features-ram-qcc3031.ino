@@ -35,7 +35,6 @@ constexpr uint8_t BT_POWER = 4;
 
 constexpr uint16_t CAN_POWER = 0x000;
 constexpr uint16_t CAN_RADIO_MODE = 0x09f;
-constexpr uint16_t CAN_RADIO_CONTROLS = 0x394;
 constexpr uint16_t CAN_VES_UNIT = 0x3dd;
 
 constexpr unsigned long BT_POWERUP_DELAY_MS = 1000;
@@ -49,16 +48,24 @@ enum RadioMode : uint8_t {
     AUX = 1
 };
 
+enum MuteState : uint8_t {
+  MUTE_OFF = 0,
+  MUTE_ON = 1
+};
+
+
 constexpr uint8_t CAN_MODULE_CS_PIN = 10;
 constexpr uint8_t CAN_MODULE_INT_PIN = 2;
 
 // = Debug switchers =
-constexpr bool debugMode = false;
-constexpr bool benchMode = false;
+constexpr bool debugMode = true;
+constexpr bool benchMode = true;
 
 // === Other ===
 
-volatile bool canIntFlag = false;
+// volatile bool canIntFlag = false;
+
+uint8_t lastMuteValue = 0x00;
 
 MCP_CAN CAN(CAN_MODULE_CS_PIN);
 
@@ -79,6 +86,7 @@ constexpr size_t msgPowerOnLen = 6;
 const unsigned char msgPowerOn[msgPowerOnLen] = { 0x41, 0, 0, 0, 0, 0 };
 
 RadioMode radioMode = OTHER;
+MuteState muteState = MUTE_OFF;
 
 const char compileDate[] = __DATE__ " " __TIME__;
 
@@ -96,9 +104,9 @@ struct ButtonPress {
 ButtonPress currentPress = {0,0,false};
 
 // === Helper functions ===
-void canISR() {
-  canIntFlag = true;
-}
+// void canISR() {
+//   canIntFlag = true;
+// }
 
 void pressButton(int pin) {
   currentPress.pin = pin;
@@ -144,45 +152,56 @@ void btSmoothOff() {
   }
 }
 
-void setupFilters() {
-  CAN.init_Mask(0, 0, 0x3ff);
-  CAN.init_Mask(1, 0, 0x3ff);
-
-  CAN.init_Filt(0, 0, CAN_POWER);
-  CAN.init_Filt(1, 0, CAN_RADIO_MODE);
-  CAN.init_Filt(2, 0, CAN_RADIO_CONTROLS);
-  CAN.init_Filt(4, 0, 0x08);
-  CAN.init_Filt(5, 0, 0x09);
+void turnOn() {
+  if (carIsOn) {
+    return;
+  }
+  btSmoothOn();
+  carIsOn = true;
+  if (debugMode) {
+    Serial.println("Power ON");
+  }
 }
 
+void turnOff() {
+  if (!carIsOn) {
+    return;
+  }
+  btSmoothOff();
+  carIsOn = false;
+  if (debugMode) {
+    Serial.println("Power OFF");
+  }
+}
+
+void setupBTOutputs() {
+  constexpr uint8_t pins[] = {PLAY_BTN, SEEK_BCK, SEEK_FWD, VOL_UP, VOL_DWN, BT_POWER};
+  for (uint8_t p : pins) {
+    pinMode(p, OUTPUT);
+  }
+}
 // === Work code ===
 
 void setup() {
-  // Power reduction
   ADCSRA &= ~_BV(ADEN);
   ACSR |= _BV(ACD);
 
   if (debugMode) {
     Serial.begin(115200);
-    Serial.print("RAM RAQ VES Control by latonita & tengz v1.0");
+    Serial.println("RAM RAQ VES Control by latonita & tengz v1.0");
     Serial.println(compileDate);
-  } else {
-    //setupFilters();
   }
+  setupBTOutputs();
 
   while (CAN_OK != CAN.begin(CAN_83K3BPS, MCP_8MHz)) {
     if (debugMode) {
       Serial.println("CAN init fail");
     }
-    delay(250);
+    delay(1000);
   }
   if (debugMode) {
     Serial.println("CAN init ok");
   }
-
-  // interrupts for can int
-  attachInterrupt(digitalPinToInterrupt(CAN_MODULE_INT_PIN), canISR, FALLING);
-
 }
 
 void sendAnnouncements() {
@@ -198,121 +217,103 @@ unsigned char buf[8];
 RadioMode newMode = OTHER;
 
 void checkIncomingMessages() {
+  if (benchMode && !carIsOn) {
+    Serial.println("Faking car ON");
+    unsigned char fakeBuf[1] = {0x81}; // ACC/Run
+    unsigned int fakeCanId = CAN_POWER;
+    len = 1;
+    memcpy(buf, fakeBuf, 1);
+    canId = fakeCanId;
+  } else {
+    if (CAN_MSGAVAIL != CAN.checkReceive()) {
+      return;
+    }
+    CAN.readMsgBuf(&len, buf);
+    canId = CAN.getCanId();
+  }
 
-  if (CAN_MSGAVAIL != CAN.checkReceive()) {
+  if (canId == CAN_POWER && len > 0) {
+    switch (buf[0]) {
+      case 0x41:  // ACC
+      case 0x81:  // RUN
+        turnOn();
+        break;
+      case 0x00:  // OFF
+      case 0x01:  // KEY IN
+      default:    // unknown / any other
+        turnOff();
+        break;
+    }
     return;
   }
 
-  CAN.readMsgBuf(&len, buf);
-  canId = CAN.getCanId();
-
-  if (canId == CAN_POWER && len > 0) {
-      if (buf[0] == 0x00 && !benchMode) {
-            if (debugMode) {
-              Serial.println("Power OFF");
-            }
-          carIsOn = false;
-          btSmoothOff();
-      } else {
-          if (debugMode) {
-            Serial.println("Power ON");
-          }
-          carIsOn = true;
-      }
-      return;
+  if (!carIsOn) {
+    return;
   }
 
-  if (!carIsOn) return;
-
-  switch (canId) {
-    case CAN_RADIO_MODE:
-
-      if (debugMode) {
-        Serial.print("CAN ID: ");
-        Serial.print(canId, HEX);
-
-        for (int i = 0; i < len; i++) {
-          Serial.print(",");
-          Serial.print(buf[i], HEX);
-        }
-        Serial.println();
-        Serial.print("Radio mode: ");
-        Serial.print(buf[0] & 0xF, HEX);
-        Serial.print(":");
-        Serial.print(radioMode);
-        Serial.print(">");
-        Serial.println(newMode);
+  if (canId == CAN_RADIO_MODE) {
+    if (debugMode) {
+      Serial.println("CAN ID: ");
+      Serial.print(canId, HEX);
+      for (int i = 0; i < len; i++) {
+        Serial.print(",");
+        Serial.print(buf[i], HEX);
       }
+      Serial.println();
+    }
 
-      newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
-      //newMode = ((buf[0] & 0x0F) == 0x06);
+    MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
 
-      if (radioMode != newMode) {
-        radioMode = newMode;
-        if (radioMode == AUX) {
-          if (!QCCPlaying) {
-            pressPlayButton();
-          }
+    if (radioMode == AUX) {
+      if (newMute != muteState) {
+        muteState = newMute;
+        if (muteState == MUTE_ON) {
           if (debugMode) {
-            Serial.print("Radio Mode changed to AUX");
+            Serial.println("Mute enabled");
           }
-        } else {
           if (QCCPlaying) {
             pressPlayButton();
           }
+        } else {
           if (debugMode) {
-            Serial.print("Radio Mode changed to something else");
+            Serial.println("Mute disabled");
+          }
+          if (!QCCPlaying) {
+            pressPlayButton();
           }
         }
       }
-      break;
-    case CAN_RADIO_CONTROLS:
-      // radio mode + buttons
-      unsigned long now = millis();
-      if (buf[3] > 0 && now > lastButtonPress + BUTTON_PRESS_DEBOUNCE_MS) {  // something pressed
-        lastButtonPress = now;
-        if (buf[3] & 1) {  // seek right
-          pressButton(SEEK_FWD);
+    }
 
-          if (debugMode) {
-            Serial.println("-- Seek >>");
-          }
-        } else if (buf[3] & 2) {  // seek left
-          pressButton(SEEK_BCK);
-          if (debugMode) {
-            Serial.println("<< Seek --");
-          }
-        } else if (buf[3] & 4) {  // rw/ff right
-          if (debugMode) {
-            Serial.println("-- RW FF >>");
-          }
-        } else if (buf[3] & 8) {  // rw/ff left
-          if (debugMode) {
-            Serial.println("<< RW FF --");
-          }
-        } else if (buf[3] & 0x20) {  // RND/PTY
+    newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
+    if (radioMode != newMode) {
+      radioMode = newMode;
+      if (radioMode == AUX) {
+        if (muteState == MUTE_OFF && !QCCPlaying) {
           pressPlayButton();
-          if (debugMode) {
-            Serial.println("[RND/PTY] - use as play/pause");
-          }
+        }
+        if (debugMode) {
+          Serial.println("Radio Mode changed to AUX");
+        }
+      } else {
+        if (QCCPlaying) {
+          pressPlayButton();
+        }
+        if (debugMode) {
+          Serial.println("Radio Mode changed to something else");
         }
       }
-
-    default:
-      break;
+    }
   }
 }
 void loop() {
   unsigned long now = millis();
 
-  if ((carIsOn || benchMode) && now > lastAnnounce + ANNOUNCE_PERIOD_MS) {
+  if (carIsOn && now > lastAnnounce + ANNOUNCE_PERIOD_MS) {
     lastAnnounce = now;
     sendAnnouncements();
   }
-  if (canIntFlag) {
-      canIntFlag = false;
-      checkIncomingMessages();
-  }
+  checkIncomingMessages();
   handleButtonRelease();
 
   set_sleep_mode(SLEEP_MODE_IDLE);
