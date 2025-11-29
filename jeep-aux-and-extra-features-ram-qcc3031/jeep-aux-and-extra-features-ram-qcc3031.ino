@@ -46,6 +46,7 @@ constexpr unsigned long MIN_PLAY_INTERVAL_MS = 2000;
 unsigned long lastPlayPress = 0;
 
 bool initialModeChecked = false;
+volatile bool canMsgAvailable = false;
 
 enum RadioMode : uint8_t {
     OTHER = 0,
@@ -66,8 +67,6 @@ constexpr bool debugMode = true;
 constexpr bool benchMode = true;
 
 // === Other ===
-
-// volatile bool canIntFlag = false;
 
 uint8_t lastMuteValue = 0x00;
 
@@ -106,6 +105,10 @@ struct ButtonPress {
   bool active;
 };
 ButtonPress currentPress = {0,0,false};
+
+void canISR() {
+  canMsgAvailable = true;
+}
 
 void pressButton(int pin) {
   if (!btIsOn) {
@@ -224,6 +227,10 @@ void setup() {
     }
     delay(1000);
   }
+
+  pinMode(CAN_MODULE_INT_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(CAN_MODULE_INT_PIN), canISR, FALLING);
+
   if (debugMode) {
     Serial.println("CAN init ok");
   }
@@ -249,9 +256,6 @@ void checkIncomingMessages() {
     memcpy(buf, fakeBuf, 1);
     canId = CAN_POWER;
   } else {
-    if (CAN_MSGAVAIL != CAN.checkReceive()) {
-      return;
-    }
     CAN.readMsgBuf(&len, buf);
     canId = CAN.getCanId();
   }
@@ -340,17 +344,35 @@ void checkIncomingMessages() {
     return;
   }
 }
+
 void loop() {
   unsigned long now = millis();
 
-  if (carIsOn && now > lastAnnounce + ANNOUNCE_PERIOD_MS) {
+  if (carIsOn && now - lastAnnounce >= ANNOUNCE_PERIOD_MS) {
     lastAnnounce = now;
     sendAnnouncements();
   }
-  checkIncomingMessages();
+
+  if (canMsgAvailable || (benchMode && !carIsOn)) {
+    canMsgAvailable = false;
+
+    if (benchMode && !carIsOn) {
+      checkIncomingMessages();
+    } else {
+      while (CAN.checkReceive() == CAN_MSGAVAIL) {
+        checkIncomingMessages();
+      }
+    }
+  }
+
   handleButtonRelease();
 
-  set_sleep_mode(SLEEP_MODE_IDLE);
+  if (!carIsOn && !benchMode) {
+    set_sleep_mode(SLEEP_MODE_PWR_DOWN);
+  } else {
+    set_sleep_mode(SLEEP_MODE_IDLE);
+  }
+
   sleep_enable();
   sleep_cpu();
   sleep_disable();
