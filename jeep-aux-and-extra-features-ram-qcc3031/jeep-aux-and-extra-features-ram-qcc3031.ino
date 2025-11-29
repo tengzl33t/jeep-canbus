@@ -38,11 +38,10 @@ constexpr uint16_t CAN_RADIO_MODE = 0x09f;
 constexpr uint16_t CAN_VES_UNIT = 0x3dd;
 
 constexpr unsigned long BT_POWERUP_DELAY_MS = 1000;
-constexpr unsigned long BT_POWEROFF_DELAY_MS = 2000;
-constexpr unsigned long CHECK_PERIOD_MS = 200;
+constexpr unsigned long BT_POWEROFF_DELAY_MS = 1000;
 constexpr unsigned long ANNOUNCE_PERIOD_MS = 1000;
 constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
-constexpr unsigned long MIN_PLAY_INTERVAL_MS = 2000;
+constexpr unsigned long MIN_PLAY_INTERVAL_MS = 1000;
 unsigned long lastPlayPress = 0;
 
 bool initialModeChecked = false;
@@ -64,11 +63,9 @@ constexpr uint8_t CAN_MODULE_INT_PIN = 2;
 
 // = Debug switchers =
 constexpr bool debugMode = true;
-constexpr bool benchMode = true;
+constexpr bool benchMode = false;
 
 // === Other ===
-
-uint8_t lastMuteValue = 0x00;
 
 MCP_CAN CAN(CAN_MODULE_CS_PIN);
 
