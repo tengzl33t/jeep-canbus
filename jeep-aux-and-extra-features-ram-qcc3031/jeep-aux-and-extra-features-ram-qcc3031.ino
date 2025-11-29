@@ -45,6 +45,8 @@ constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
 constexpr unsigned long MIN_PLAY_INTERVAL_MS = 2000;
 unsigned long lastPlayPress = 0;
 
+bool initialModeChecked = false;
+
 enum RadioMode : uint8_t {
     OTHER = 0,
     AUX = 1
@@ -285,6 +287,17 @@ void checkIncomingMessages() {
 
   MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
   newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
+
+  if (!initialModeChecked) {
+    initialModeChecked = true;
+    radioMode = newMode;
+    muteState = newMute;
+
+    if (radioMode == AUX && muteState == MUTE_OFF) {
+      pressPlayButton();
+    }
+    return;
+  }
 
   if (radioMode != newMode) {
     radioMode = newMode;
