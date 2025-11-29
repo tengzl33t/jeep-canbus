@@ -42,6 +42,8 @@ constexpr unsigned long BT_POWEROFF_DELAY_MS = 2000;
 constexpr unsigned long CHECK_PERIOD_MS = 200;
 constexpr unsigned long ANNOUNCE_PERIOD_MS = 1000;
 constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
+constexpr unsigned long MIN_PLAY_INTERVAL_MS = 2000;
+unsigned long lastPlayPress = 0;
 
 enum RadioMode : uint8_t {
     OTHER = 0,
@@ -103,53 +105,70 @@ struct ButtonPress {
 };
 ButtonPress currentPress = {0,0,false};
 
-// === Helper functions ===
-// void canISR() {
-//   canIntFlag = true;
-// }
-
 void pressButton(int pin) {
+  if (!btIsOn) {
+    return;
+  }
+  unsigned long now = millis();
+  if (now - lastButtonPress < BUTTON_PRESS_DEBOUNCE_MS) {
+    return;
+  }
+
+  lastButtonPress = now;
   currentPress.pin = pin;
   currentPress.startTime = millis();
   currentPress.active = true;
+
+  pinMode(pin, OUTPUT);
   digitalWrite(pin, HIGH);
 }
 
 void handleButtonRelease() {
-  if(currentPress.active && millis() - currentPress.startTime >= 200){
-    digitalWrite(currentPress.pin,LOW);
-    currentPress.active=false;
+  if (currentPress.active && millis() - currentPress.startTime >= 200) {
+    pinMode(currentPress.pin, INPUT);
+    currentPress.active = false;
   }
 }
 
 void pressPlayButton() {
+  unsigned long now = millis();
+  if (now - lastPlayPress < MIN_PLAY_INTERVAL_MS) {
+    return;
+  }
+  lastPlayPress = now;
   QCCPlaying = !QCCPlaying;
   pressButton(PLAY_BTN);
 }
 
 void btSmoothOn() {
-  if (!btIsOn) {
-    // soft-start / "smooth" power up
-    btPowerChangeTime = millis();
-    while (millis() - btPowerChangeTime < BT_POWERUP_DELAY_MS) {
-      // idle while allowing CAN interrupts
-      handleButtonRelease();
-    }
-
-    digitalWrite(BT_POWER, HIGH);
-    btIsOn = true;
+  if (btIsOn) {
+    return;
   }
+  btPowerChangeTime = millis();
+  while (millis() - btPowerChangeTime < BT_POWERUP_DELAY_MS) {
+    handleButtonRelease();
+  }
+
+  digitalWrite(BT_POWER, HIGH);
+  btIsOn = true;
+  lastPlayPress = millis() - MIN_PLAY_INTERVAL_MS + 500;
 }
 
 void btSmoothOff() {
-  if (btIsOn) {
-    digitalWrite(BT_POWER, LOW);
-    btPowerChangeTime = millis();
-    while (millis() - btPowerChangeTime < BT_POWEROFF_DELAY_MS) {
-      handleButtonRelease();
-    }
-    btIsOn = false;
+  if (!btIsOn) {
+    return;
   }
+  if (currentPress.active) {
+    pinMode(currentPress.pin, INPUT);
+    currentPress.active = false;
+  }
+  digitalWrite(BT_POWER, LOW);
+  btPowerChangeTime = millis();
+  while (millis() - btPowerChangeTime < BT_POWEROFF_DELAY_MS) {
+    handleButtonRelease();
+  }
+  btIsOn = false;
+  QCCPlaying = false;
 }
 
 void turnOn() {
@@ -175,11 +194,15 @@ void turnOff() {
 }
 
 void setupBTOutputs() {
-  constexpr uint8_t pins[] = {PLAY_BTN, SEEK_BCK, SEEK_FWD, VOL_UP, VOL_DWN, BT_POWER};
-  for (uint8_t p : pins) {
-    pinMode(p, OUTPUT);
+  constexpr uint8_t buttonPins[] = {PLAY_BTN, SEEK_BCK, SEEK_FWD, VOL_UP, VOL_DWN};
+  for (uint8_t p : buttonPins) {
+    pinMode(p, INPUT);
   }
+
+  pinMode(BT_POWER, OUTPUT);
+  digitalWrite(BT_POWER, LOW);
 }
+
 // === Work code ===
 
 void setup() {
@@ -247,63 +270,62 @@ void checkIncomingMessages() {
     return;
   }
 
-  if (!carIsOn) {
+  if (!carIsOn || canId != CAN_RADIO_MODE) {
     return;
   }
 
-  if (canId == CAN_RADIO_MODE) {
-    if (debugMode) {
-      Serial.println("CAN ID: ");
-      Serial.print(canId, HEX);
-      for (int i = 0; i < len; i++) {
-        Serial.print(",");
-        Serial.print(buf[i], HEX);
-      }
-      Serial.println();
+  if (debugMode) {
+    Serial.println("CAN ID: ");
+    Serial.print(canId, HEX);
+    for (int i = 0; i < len; i++) {
+      Serial.print(",");
+      Serial.print(buf[i], HEX);
     }
+    Serial.println();
+  }
 
-    MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
+  MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
+  newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
 
+  if (radioMode != newMode) {
+    radioMode = newMode;
+    muteState = newMute;
     if (radioMode == AUX) {
-      if (newMute != muteState) {
-        muteState = newMute;
-        if (muteState == MUTE_ON) {
-          if (debugMode) {
-            Serial.println("Mute enabled");
-          }
-          if (QCCPlaying) {
-            pressPlayButton();
-          }
-        } else {
-          if (debugMode) {
-            Serial.println("Mute disabled");
-          }
-          if (!QCCPlaying) {
-            pressPlayButton();
-          }
-        }
+      if (muteState == MUTE_OFF && !QCCPlaying) {
+        pressPlayButton();
+      }
+      if (debugMode) {
+        Serial.println("Radio Mode changed to AUX");
+      }
+    } else {
+      if (QCCPlaying) {
+        pressPlayButton();
+      }
+      if (debugMode) {
+        Serial.println("Radio Mode changed to something else");
       }
     }
+    return;
+  }
 
-    newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
-    if (radioMode != newMode) {
-      radioMode = newMode;
-      if (radioMode == AUX) {
-        if (muteState == MUTE_OFF && !QCCPlaying) {
-          pressPlayButton();
-        }
-        if (debugMode) {
-          Serial.println("Radio Mode changed to AUX");
-        }
-      } else {
-        if (QCCPlaying) {
-          pressPlayButton();
-        }
-        if (debugMode) {
-          Serial.println("Radio Mode changed to something else");
-        }
+  if (radioMode == AUX && newMute != muteState) {
+    muteState = newMute;
+    if (muteState == MUTE_ON) {
+      if (debugMode) {
+        Serial.println("Mute enabled");
+      }
+      if (QCCPlaying) {
+        pressPlayButton();
+      }
+    } else {
+      if (debugMode) {
+        Serial.println("Mute disabled");
+      }
+      if (!QCCPlaying) {
+        pressPlayButton();
       }
     }
+    return;
   }
 }
 void loop() {
