@@ -243,10 +243,9 @@ void checkIncomingMessages() {
   if (benchMode && !carIsOn) {
     Serial.println("Faking car ON");
     unsigned char fakeBuf[1] = {0x81}; // ACC/Run
-    unsigned int fakeCanId = CAN_POWER;
     len = 1;
     memcpy(buf, fakeBuf, 1);
-    canId = fakeCanId;
+    canId = CAN_POWER;
   } else {
     if (CAN_MSGAVAIL != CAN.checkReceive()) {
       return;
