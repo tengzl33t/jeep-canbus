@@ -286,7 +286,9 @@ void checkIncomingMessages() {
     Serial.println();
   }
 
+  // 0xEF for bench, 0xE1 in car
   MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
+
   newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
 
   if (!initialModeChecked) {
