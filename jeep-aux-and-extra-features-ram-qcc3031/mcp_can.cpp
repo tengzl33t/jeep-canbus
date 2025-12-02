@@ -1069,6 +1069,11 @@ INT8U MCP_CAN::isExtendedFrame(void)
     return m_nExtFlg;
 } 
 
+INT8U MCP_CAN::setMCP2515Mode(const INT8U newmode) {
+    // call the existing private helper
+    return mcp2515_setCANCTRL_Mode(newmode);
+}
+
 /*********************************************************************************************************
   END FILE
 *********************************************************************************************************/

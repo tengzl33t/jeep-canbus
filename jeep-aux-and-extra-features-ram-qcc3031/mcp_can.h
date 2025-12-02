@@ -110,6 +110,7 @@ public:
     INT32U getCanId(void);                                          /* get can id when receive      */
     INT8U isRemoteRequest(void);                                    /* get RR flag when receive     */
     INT8U isExtendedFrame(void);                                    /* did we recieve 29bit frame?  */
+    INT8U setMCP2515Mode(const INT8U newmode);
 };
 
 #endif

@@ -42,8 +42,8 @@ constexpr unsigned long BT_POWEROFF_DELAY_MS = 1000;
 constexpr unsigned long ANNOUNCE_PERIOD_MS = 1000;
 constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
 constexpr unsigned long MIN_PLAY_INTERVAL_MS = 1000;
-constexpr unsigned long CAR_POWER_TIMEOUT_MS = 5000;
-unsigned long lastPowerMessage = 0;
+constexpr unsigned long CAN_ACTIVITY_TIMEOUT_MS = 5000;
+unsigned long lastCanActivity = 0;
 unsigned long lastPlayPress = 0;
 
 bool initialModeChecked = false;
@@ -179,8 +179,12 @@ void turnOn() {
   if (carIsOn) {
     return;
   }
+
+  CAN.setMCP2515Mode(MODE_NORMAL);
   btSmoothOn();
   carIsOn = true;
+  lastCanActivity = millis();
+
   if (debugMode) {
     Serial.println("Power ON");
   }
@@ -192,6 +196,11 @@ void turnOff() {
   }
   btSmoothOff();
   carIsOn = false;
+
+  if (!benchMode) {
+    CAN.setMCP2515Mode(MODE_LISTENONLY);
+  }
+
   if (debugMode) {
     Serial.println("Power OFF");
   }
@@ -259,9 +268,19 @@ void checkIncomingMessages() {
     canId = CAN.getCanId();
   }
 
+  if (debugMode) {
+    Serial.println("CAN ID: ");
+    Serial.print(canId, HEX);
+    for (int i = 0; i < len; i++) {
+      Serial.print(",");
+      Serial.print(buf[i], HEX);
+    }
+    Serial.println();
+  }
+
   // may worth checking for all messages without if statement?
   if (canId == CAN_POWER || canId == CAN_RADIO_MODE) {
-    lastPowerMessage = millis();
+    lastCanActivity = millis();
   }
 
   if (canId == CAN_POWER && len > 0) {
@@ -281,16 +300,6 @@ void checkIncomingMessages() {
 
   if (!carIsOn || canId != CAN_RADIO_MODE) {
     return;
-  }
-
-  if (debugMode) {
-    Serial.println("CAN ID: ");
-    Serial.print(canId, HEX);
-    for (int i = 0; i < len; i++) {
-      Serial.print(",");
-      Serial.print(buf[i], HEX);
-    }
-    Serial.println();
   }
 
   // 0xEF for bench, 0xE1 in car
@@ -354,9 +363,9 @@ void checkIncomingMessages() {
 void loop() {
   unsigned long now = millis();
 
-  if (carIsOn && (now - lastPowerMessage > CAR_POWER_TIMEOUT_MS)) {
+  if (carIsOn && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
     if (debugMode) {
-      Serial.println("CAN timeout - forcing power off");
+      Serial.println("No CAN activity - forcing power OFF");
     }
     turnOff();
   }
