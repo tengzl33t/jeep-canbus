@@ -42,7 +42,7 @@ constexpr unsigned long BT_POWEROFF_DELAY_MS = 1000;
 constexpr unsigned long ANNOUNCE_PERIOD_MS = 1000;
 constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
 constexpr unsigned long MIN_PLAY_INTERVAL_MS = 1000;
-constexpr unsigned long CAN_ACTIVITY_TIMEOUT_MS = 5000;
+constexpr unsigned long CAN_ACTIVITY_TIMEOUT_MS = 30000;
 unsigned long lastCanActivity = 0;
 unsigned long lastPlayPress = 0;
 
