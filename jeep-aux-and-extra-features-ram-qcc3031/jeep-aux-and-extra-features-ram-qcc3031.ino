@@ -249,6 +249,9 @@ void sendAnnouncements() {
     CAN.sendMsgBuf(CAN_POWER, 0, msgPowerOnLen, msgPowerOn);
   }
   CAN.sendMsgBuf(CAN_VES_UNIT, 0, msgVesAuxModeLen, msgVesAuxMode);
+  if (debugMode) {
+    Serial.println("CAN announcements sent.");
+  }
 }
 
 unsigned int canId = 0;
@@ -288,11 +291,17 @@ void checkIncomingMessages() {
       case 0x41:  // ACC
       case 0x81:  // RUN
         turnOn();
+        if (debugMode) {
+          Serial.println("Turned ON by power signal");
+        }
         break;
       case 0x00:  // OFF
       case 0x01:  // KEY IN
       default:    // unknown / any other
         turnOff();
+        if (debugMode) {
+          Serial.println("Turning OFF by power signal");
+        }
         break;
     }
     return;
