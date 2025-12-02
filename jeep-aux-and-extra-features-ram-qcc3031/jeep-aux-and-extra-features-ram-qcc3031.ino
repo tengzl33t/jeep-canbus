@@ -42,6 +42,8 @@ constexpr unsigned long BT_POWEROFF_DELAY_MS = 1000;
 constexpr unsigned long ANNOUNCE_PERIOD_MS = 1000;
 constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
 constexpr unsigned long MIN_PLAY_INTERVAL_MS = 1000;
+constexpr unsigned long CAR_POWER_TIMEOUT_MS = 120000;
+unsigned long lastPowerMessage = 0;
 unsigned long lastPlayPress = 0;
 
 bool initialModeChecked = false;
@@ -257,6 +259,10 @@ void checkIncomingMessages() {
     canId = CAN.getCanId();
   }
 
+  if (canId == CAN_POWER || canId == CAN_RADIO_MODE) {
+    lastPowerMessage = millis();
+  }
+
   if (canId == CAN_POWER && len > 0) {
     switch (buf[0]) {
       case 0x41:  // ACC
@@ -346,6 +352,13 @@ void checkIncomingMessages() {
 
 void loop() {
   unsigned long now = millis();
+
+  if (carIsOn && (now - lastPowerMessage > CAR_POWER_TIMEOUT_MS)) {
+    if (debugMode) {
+      Serial.println("CAN timeout - forcing power off");
+    }
+    turnOff();
+  }
 
   if (carIsOn && now - lastAnnounce >= ANNOUNCE_PERIOD_MS) {
     lastAnnounce = now;
