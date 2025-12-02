@@ -242,6 +242,7 @@ void setup() {
   if (debugMode) {
     Serial.println("CAN init ok");
   }
+  delay(1000);
 }
 
 void sendAnnouncements() {
@@ -372,7 +373,7 @@ void checkIncomingMessages() {
 void loop() {
   unsigned long now = millis();
 
-  if (carIsOn && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
+  if (carIsOn && !benchMode && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
     if (debugMode) {
       Serial.println("No CAN activity - forcing power OFF");
     }
