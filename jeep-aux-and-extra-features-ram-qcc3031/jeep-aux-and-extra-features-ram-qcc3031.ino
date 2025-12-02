@@ -42,7 +42,7 @@ constexpr unsigned long BT_POWEROFF_DELAY_MS = 1000;
 constexpr unsigned long ANNOUNCE_PERIOD_MS = 1000;
 constexpr unsigned long BUTTON_PRESS_DEBOUNCE_MS = 350;
 constexpr unsigned long MIN_PLAY_INTERVAL_MS = 1000;
-constexpr unsigned long CAR_POWER_TIMEOUT_MS = 120000;
+constexpr unsigned long CAR_POWER_TIMEOUT_MS = 5000;
 unsigned long lastPowerMessage = 0;
 unsigned long lastPlayPress = 0;
 
@@ -259,6 +259,7 @@ void checkIncomingMessages() {
     canId = CAN.getCanId();
   }
 
+  // may worth checking for all messages without if statement?
   if (canId == CAN_POWER || canId == CAN_RADIO_MODE) {
     lastPowerMessage = millis();
   }
