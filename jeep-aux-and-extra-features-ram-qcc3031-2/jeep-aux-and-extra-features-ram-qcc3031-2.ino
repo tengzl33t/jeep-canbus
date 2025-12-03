@@ -16,12 +16,15 @@
  * Copyright (C) 2015-2017 Anton Viktorov <latonita@yandex.ru> https://github.com/latonita/jeep-canbus,
  * 2025 Tengz https://github.com/tengzl33t/jeep-canbus
  *
+ * Modified https://github.com/autowp/arduino-mcp2515 library is used for MCP2515
+ *
  * This is free software. You may use/redistribute it under The MIT License terms.
  *
  *****************************************************************************************/
 #include <SoftwareSerial.h>
 #include <SPI.h>
-#include "mcp_can.h"
+#include "mcp2515.h"
+
 #include <avr/sleep.h>
 
 // === Constants ===
@@ -47,7 +50,7 @@ unsigned long lastCanActivity = 0;
 unsigned long lastPlayPress = 0;
 
 bool initialModeChecked = false;
-volatile bool canMsgAvailable = false;
+volatile bool canInterrupt = false;
 
 enum RadioMode : uint8_t {
     OTHER = 0,
@@ -65,11 +68,23 @@ constexpr uint8_t CAN_MODULE_INT_PIN = 2;
 
 // = Debug switchers =
 constexpr bool debugMode = true;
-constexpr bool benchMode = false;
+constexpr bool benchMode = true;
 
 // === Other ===
 
-MCP_CAN CAN(CAN_MODULE_CS_PIN);
+void debugPrint(const char* msg) {
+  if (debugMode) {
+    Serial.println(msg);
+  }
+}
+
+void debugPrint(const __FlashStringHelper* msg) {
+  if (debugMode) {
+    Serial.println(msg);
+  }
+}
+
+MCP2515 mcp2515(CAN_MODULE_CS_PIN);
 
 unsigned long lastAnnounce = 0;
 unsigned long lastButtonPress = 0;
@@ -106,7 +121,7 @@ struct ButtonPress {
 ButtonPress currentPress = {0,0,false};
 
 void canISR() {
-  canMsgAvailable = true;
+  canInterrupt = true;
 }
 
 void pressButton(int pin) {
@@ -180,14 +195,12 @@ void turnOn() {
     return;
   }
 
-  CAN.setMCP2515Mode(MODE_NORMAL);
+  mcp2515.setNormalMode();
   btSmoothOn();
   carIsOn = true;
   lastCanActivity = millis();
 
-  if (debugMode) {
-    Serial.println("Power ON");
-  }
+  debugPrint(F("Power ON"));
 }
 
 void turnOff() {
@@ -198,12 +211,10 @@ void turnOff() {
   carIsOn = false;
 
   if (!benchMode) {
-    CAN.setMCP2515Mode(MODE_LISTENONLY);
+    mcp2515.setListenOnlyMode();
   }
 
-  if (debugMode) {
-    Serial.println("Power OFF");
-  }
+  debugPrint(F("Power OFF"));
 }
 
 void setupBTOutputs() {
@@ -224,98 +235,107 @@ void setup() {
 
   if (debugMode) {
     Serial.begin(115200);
-    Serial.println("RAM RAQ VES Control by latonita & tengz v1.0");
-    Serial.println(compileDate);
   }
+  debugPrint(F("RAM RAQ VES Control by latonita & tengz v1.0"));
+  debugPrint(compileDate);
+
   setupBTOutputs();
 
-  while (CAN_OK != CAN.begin(CAN_83K3BPS, MCP_8MHz)) {
-    if (debugMode) {
-      Serial.println("CAN init fail");
-    }
+  mcp2515.reset();
+
+  while (mcp2515.setBitrate(CAN_83K3BPS, MCP_8MHZ) != MCP2515::ERROR_OK) {
+    debugPrint(F("CAN init fail, retrying..."));
     delay(1000);
+    mcp2515.reset();
+  }
+
+  if (benchMode) {
+    mcp2515.setNormalMode();
+  } else {
+    mcp2515.setListenOnlyMode();
   }
 
   pinMode(CAN_MODULE_INT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(CAN_MODULE_INT_PIN), canISR, FALLING);
 
-  if (debugMode) {
-    Serial.println("CAN init ok");
-  }
+  debugPrint(F("CAN init OK"));
   delay(1000);
 }
 
 void sendAnnouncements() {
+  struct can_frame frame;
+
   if (benchMode) {
-    CAN.sendMsgBuf(CAN_POWER, 0, msgPowerOnLen, msgPowerOn);
+    frame.can_id = CAN_POWER;
+    frame.can_dlc = msgPowerOnLen;
+    memcpy(frame.data, msgPowerOn, msgPowerOnLen);
+    mcp2515.sendMessage(&frame);
   }
-  CAN.sendMsgBuf(CAN_VES_UNIT, 0, msgVesAuxModeLen, msgVesAuxMode);
-  if (debugMode) {
-    Serial.println("CAN announcements sent.");
-  }
+
+  frame.can_id = CAN_VES_UNIT;
+  frame.can_dlc = msgVesAuxModeLen;
+  memcpy(frame.data, msgVesAuxMode, msgVesAuxModeLen);
+  mcp2515.sendMessage(&frame);
+
+  debugPrint(F("CAN announcement sent"));
 }
 
-unsigned int canId = 0;
-unsigned char len = 0;
-unsigned char buf[8];
 RadioMode newMode = OTHER;
 
-void checkIncomingMessages() {
+void checkIncomingMessages(MCP2515::RXBn rxBuffer = MCP2515::RXB0) {
+  struct can_frame frame;
+
   if (benchMode && !carIsOn) {
-    Serial.println("Faking car ON");
-    unsigned char fakeBuf[1] = {0x81}; // ACC/Run
-    len = 1;
-    memcpy(buf, fakeBuf, 1);
-    canId = CAN_POWER;
+    debugPrint(F("Fake car ON signal"));
+    frame.can_id = CAN_POWER;
+    frame.can_dlc = 1;
+    frame.data[0] = 0x81; // ACC/Run
   } else {
-    CAN.readMsgBuf(&len, buf);
-    canId = CAN.getCanId();
+    if (mcp2515.readMessage(rxBuffer, &frame) != MCP2515::ERROR_OK) {
+      return;
+    }
   }
 
   if (debugMode) {
-    Serial.println("CAN ID: ");
-    Serial.print(canId, HEX);
-    for (int i = 0; i < len; i++) {
-      Serial.print(",");
-      Serial.print(buf[i], HEX);
+    Serial.print("CAN ID: 0x");
+    Serial.print(frame.can_id, HEX);
+    for (int i = 0; i < frame.can_dlc; i++) {
+      Serial.print(",0x");
+      Serial.print(frame.data[i], HEX);
     }
     Serial.println();
   }
 
   // may worth checking for all messages without if statement?
-  if (canId == CAN_POWER || canId == CAN_RADIO_MODE) {
+  if (frame.can_id == CAN_POWER || frame.can_id == CAN_RADIO_MODE) {
     lastCanActivity = millis();
   }
 
-  if (canId == CAN_POWER && len > 0) {
-    switch (buf[0]) {
+  if (frame.can_id == CAN_POWER && frame.can_dlc > 0) {
+    switch (frame.data[0]) {
       case 0x41:  // ACC
       case 0x81:  // RUN
         turnOn();
-        if (debugMode) {
-          Serial.println("Turned ON by power signal");
-        }
+        debugPrint(F("Turned ON by power signal"));
         break;
       case 0x00:  // OFF
       case 0x01:  // KEY IN
       default:    // unknown / any other
         turnOff();
-        if (debugMode) {
-          Serial.println("Turning OFF by power signal");
-        }
+      debugPrint(F("Turned OFF by power signal"));
         break;
     }
     return;
   }
 
-  if (!carIsOn || canId != CAN_RADIO_MODE) {
+  if (!carIsOn || frame.can_id != CAN_RADIO_MODE) {
     return;
   }
 
   // 0xEF for bench, 0xE1 in car
-  MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
+  MuteState newMute = (frame.data[7] == 0xE1) ? MUTE_ON : MUTE_OFF;
 
-  newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
+  newMode = ((frame.data[0] & 0xF) == 6) ? AUX : OTHER;
 
   if (!initialModeChecked) {
     initialModeChecked = true;
@@ -335,16 +355,12 @@ void checkIncomingMessages() {
       if (muteState == MUTE_OFF && !QCCPlaying) {
         pressPlayButton();
       }
-      if (debugMode) {
-        Serial.println("Radio Mode changed to AUX");
-      }
+      debugPrint(F("Radio mode changed to AUX"));
     } else {
       if (QCCPlaying) {
         pressPlayButton();
       }
-      if (debugMode) {
-        Serial.println("Radio Mode changed to something else");
-      }
+      debugPrint(F("Radio mode changed to something else"));
     }
     return;
   }
@@ -352,19 +368,15 @@ void checkIncomingMessages() {
   if (radioMode == AUX && newMute != muteState) {
     muteState = newMute;
     if (muteState == MUTE_ON) {
-      if (debugMode) {
-        Serial.println("Mute enabled");
-      }
       if (QCCPlaying) {
         pressPlayButton();
       }
+      debugPrint(F("Muted"));
     } else {
-      if (debugMode) {
-        Serial.println("Mute disabled");
-      }
       if (!QCCPlaying) {
         pressPlayButton();
       }
+      debugPrint(F("Unmuted"));
     }
     return;
   }
@@ -373,11 +385,14 @@ void checkIncomingMessages() {
 void loop() {
   unsigned long now = millis();
 
-  if (carIsOn && !benchMode && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
-    if (debugMode) {
-      Serial.println("No CAN activity - forcing power OFF");
+  if (carIsOn && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
+    if (!benchMode) {
+      debugPrint(F("No CAN activity - forcing power OFF"));
+      turnOff();
+    } else {
+      debugPrint(F("No CAN activity but in bench mode - skipping forced power OFF"));
+      lastCanActivity = millis();
     }
-    turnOff();
   }
 
   if (carIsOn && now - lastAnnounce >= ANNOUNCE_PERIOD_MS) {
@@ -385,14 +400,20 @@ void loop() {
     sendAnnouncements();
   }
 
-  if (canMsgAvailable || (benchMode && !carIsOn)) {
-    canMsgAvailable = false;
+  if (canInterrupt || (benchMode && !carIsOn)) {
+    canInterrupt = false;
 
     if (benchMode && !carIsOn) {
       checkIncomingMessages();
     } else {
-      while (CAN.checkReceive() == CAN_MSGAVAIL) {
-        checkIncomingMessages();
+      uint8_t irq = mcp2515.getInterrupts();
+
+      if (irq & MCP2515::CANINTF_RX0IF) {
+        checkIncomingMessages(MCP2515::RXB0);
+      }
+
+      if (irq & MCP2515::CANINTF_RX1IF) {
+        checkIncomingMessages(MCP2515::RXB1);
       }
     }
   }
