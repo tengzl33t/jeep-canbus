@@ -64,7 +64,7 @@ constexpr uint8_t CAN_MODULE_CS_PIN = 10;
 constexpr uint8_t CAN_MODULE_INT_PIN = 2;
 
 // = Debug switchers =
-constexpr bool debugMode = true;
+constexpr bool debugMode = false;
 constexpr bool benchMode = false;
 
 // === Other ===
@@ -313,7 +313,7 @@ void checkIncomingMessages() {
   }
 
   // 0xEF for bench, 0xE1 in car
-  MuteState newMute = (buf[7] == 0xEF) ? MUTE_ON : MUTE_OFF;
+  MuteState newMute = (buf[7] == 0xE1) ? MUTE_ON : MUTE_OFF;
 
   newMode = ((buf[0] & 0xF) == 6) ? AUX : OTHER;
 
@@ -399,11 +399,7 @@ void loop() {
 
   handleButtonRelease();
 
-  if (!carIsOn && !benchMode) {
-    set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-  } else {
-    set_sleep_mode(SLEEP_MODE_IDLE);
-  }
+  set_sleep_mode(SLEEP_MODE_IDLE);
 
   sleep_enable();
   sleep_cpu();
