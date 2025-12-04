@@ -69,6 +69,19 @@ constexpr bool benchMode = false;
 
 // === Other ===
 
+void debugPrint(const char* msg) {
+  if (debugMode) {
+    Serial.println(msg);
+  }
+}
+
+void debugPrint(const __FlashStringHelper* msg) {
+  if (debugMode) {
+    Serial.println(msg);
+  }
+}
+
+
 MCP_CAN CAN(CAN_MODULE_CS_PIN);
 
 unsigned long lastAnnounce = 0;
@@ -184,10 +197,7 @@ void turnOn() {
   btSmoothOn();
   carIsOn = true;
   lastCanActivity = millis();
-
-  if (debugMode) {
-    Serial.println("Power ON");
-  }
+  debugPrint(F("Power ON"));
 }
 
 void turnOff() {
@@ -200,10 +210,7 @@ void turnOff() {
   if (!benchMode) {
     CAN.setMCP2515Mode(MODE_LISTENONLY);
   }
-
-  if (debugMode) {
-    Serial.println("Power OFF");
-  }
+  debugPrint(F("Power OFF"));
 }
 
 void setupBTOutputs() {
@@ -224,24 +231,21 @@ void setup() {
 
   if (debugMode) {
     Serial.begin(115200);
-    Serial.println("RAM RAQ VES Control by latonita & tengz v1.0");
-    Serial.println(compileDate);
   }
+  debugPrint(F("RAM RAQ VES Control by latonita & tengz v1.0"));
+  debugPrint(compileDate);
+
   setupBTOutputs();
 
   while (CAN_OK != CAN.begin(CAN_83K3BPS, MCP_8MHz)) {
-    if (debugMode) {
-      Serial.println("CAN init fail");
-    }
+    debugPrint(F("CAN init fail, retrying..."));
     delay(1000);
   }
 
   pinMode(CAN_MODULE_INT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(CAN_MODULE_INT_PIN), canISR, FALLING);
 
-  if (debugMode) {
-    Serial.println("CAN init ok");
-  }
+  debugPrint(F("CAN init OK"));
   delay(1000);
 }
 
@@ -250,9 +254,7 @@ void sendAnnouncements() {
     CAN.sendMsgBuf(CAN_POWER, 0, msgPowerOnLen, msgPowerOn);
   }
   CAN.sendMsgBuf(CAN_VES_UNIT, 0, msgVesAuxModeLen, msgVesAuxMode);
-  if (debugMode) {
-    Serial.println("CAN announcements sent.");
-  }
+  debugPrint(F("CAN announcement sent"));
 }
 
 unsigned int canId = 0;
@@ -262,7 +264,7 @@ RadioMode newMode = OTHER;
 
 void checkIncomingMessages() {
   if (benchMode && !carIsOn) {
-    Serial.println("Faking car ON");
+    debugPrint(F("Bench car ON signal"));
     unsigned char fakeBuf[1] = {0x81}; // ACC/Run
     len = 1;
     memcpy(buf, fakeBuf, 1);
@@ -292,17 +294,13 @@ void checkIncomingMessages() {
       case 0x41:  // ACC
       case 0x81:  // RUN
         turnOn();
-        if (debugMode) {
-          Serial.println("Turned ON by power signal");
-        }
+        debugPrint(F("Turned ON by power signal"));
         break;
       case 0x00:  // OFF
       case 0x01:  // KEY IN
       default:    // unknown / any other
         turnOff();
-        if (debugMode) {
-          Serial.println("Turning OFF by power signal");
-        }
+        debugPrint(F("Turned OFF by power signal"));
         break;
     }
     return;
@@ -335,16 +333,12 @@ void checkIncomingMessages() {
       if (muteState == MUTE_OFF && !QCCPlaying) {
         pressPlayButton();
       }
-      if (debugMode) {
-        Serial.println("Radio Mode changed to AUX");
-      }
+      debugPrint(F("Radio mode changed to AUX"));
     } else {
       if (QCCPlaying) {
         pressPlayButton();
       }
-      if (debugMode) {
-        Serial.println("Radio Mode changed to something else");
-      }
+      debugPrint(F("Radio mode changed to something else"));
     }
     return;
   }
@@ -352,19 +346,15 @@ void checkIncomingMessages() {
   if (radioMode == AUX && newMute != muteState) {
     muteState = newMute;
     if (muteState == MUTE_ON) {
-      if (debugMode) {
-        Serial.println("Mute enabled");
-      }
       if (QCCPlaying) {
         pressPlayButton();
       }
+      debugPrint(F("Muted"));
     } else {
-      if (debugMode) {
-        Serial.println("Mute disabled");
-      }
       if (!QCCPlaying) {
         pressPlayButton();
       }
+      debugPrint(F("Unmuted"));
     }
     return;
   }
@@ -374,10 +364,11 @@ void loop() {
   unsigned long now = millis();
 
   if (carIsOn && !benchMode && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
-    if (debugMode) {
-      Serial.println("No CAN activity - forcing power OFF");
-    }
+    debugPrint(F("No CAN activity - forcing power OFF"));
     turnOff();
+  } else {
+    debugPrint(F("No CAN activity but in bench mode - skipping forced power OFF"));
+    lastCanActivity = millis();
   }
 
   if (carIsOn && now - lastAnnounce >= ANNOUNCE_PERIOD_MS) {
@@ -399,7 +390,7 @@ void loop() {
 
   handleButtonRelease();
 
-  set_sleep_mode(SLEEP_MODE_IDLE);
+  set_sleep_mode(SLEEP_MODE_ADC);
 
   sleep_enable();
   sleep_cpu();
