@@ -193,7 +193,10 @@ void turnOn() {
     return;
   }
 
-  CAN.setMCP2515Mode(MODE_NORMAL);
+  if (!benchMode) {
+    CAN.setMCP2515Mode(MODE_NORMAL);
+  }
+
   btSmoothOn();
   carIsOn = true;
   lastCanActivity = millis();
@@ -244,6 +247,10 @@ void setup() {
 
   pinMode(CAN_MODULE_INT_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(CAN_MODULE_INT_PIN), canISR, FALLING);
+
+  if (!benchMode) {
+    CAN.setMCP2515Mode(MODE_LISTENONLY);
+  }
 
   debugPrint(F("CAN init OK"));
   delay(1000);
@@ -364,11 +371,13 @@ void loop() {
   unsigned long now = millis();
 
   if (carIsOn && !benchMode && (now - lastCanActivity > CAN_ACTIVITY_TIMEOUT_MS)) {
-    debugPrint(F("No CAN activity - forcing power OFF"));
-    turnOff();
-  } else {
-    debugPrint(F("No CAN activity but in bench mode - skipping forced power OFF"));
-    lastCanActivity = millis();
+    if (benchMode) {
+      debugPrint(F("No CAN activity but in bench mode - skipping forced power OFF"));
+      lastCanActivity = millis();
+    } else {
+      debugPrint(F("No CAN activity - forcing power OFF"));
+      turnOff();
+    }
   }
 
   if (carIsOn && now - lastAnnounce >= ANNOUNCE_PERIOD_MS) {
